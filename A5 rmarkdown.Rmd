@@ -1,0 +1,250 @@
+---
+title: "Classification of Normal and Abnormal Red Blood Cells"
+author: "Nikki Smith"
+date: "2024-12-06"
+output: html_document
+---
+
+## 1. Introduction
+
+Red blood cells are a very important and very diverse kind of cell in the human body. Among other tasks, they are responsible for transporting oxygen and carbon dioxide from and to the lungs. However, there are several genetic disorders that could disrupt the form and function of red blood cells. Among them is Sickle Cell Disease (SCD), a blood disorder caused by a mutation in haemoglobin subunit beta which leads to red blood cells with a sickle-like appearance (Kato et al., 2018). SCD varies in severity depending on an individual's genotype, but the most severe cases can result in chronic haemolytic anaemia, pain episodes and organ damage (Kato et al., 2018). Due to these severe symptoms, there is a need to diagnose SCD to help with management of the condition.
+
+Some countries have newborn diagnostics programs for SCD that include testing dried blood samples retrieved by heel sticks (Kavanagh et al., 2022). However, machine learning has shown some promise in assisting with diagnostics- convolution neural networks (CNNs), in particular. For example, one study compared ResNet-50, AlexNet, VGG16, VGG19 and MobileNet architecture and two machine learning classifiers to determine which ones were most accurate classifiers (Jennifer et al., 2023). 
+
+Therefore this study was an exploratory look into how convolution neural networks could be used for identifying abnormal SCD cells. Using R and Python, a pre-made model was modified and trained on various cell images. Blood cell images from three sources were gathered in order to train and test the model. The objective is to explore if CNNs could be a useful diagnostics tool for newborn screening.
+
+## 2. Description of Dataset
+
+The data used was mixed from three sources to create a larger, more diverse, data set. 1544 images were used for the training set and 174 images were used in the test set. Florence Tushabe's (2022) dataset on Kaggle contained 422 sickle cell images and 147 control images that I used. 1012 training images along with 94 test images were used from another project (Unknown author, 2021). The rest of the images came from Zenodo (Makhro, 2023). The file types for most of the images were .jpg, but the images sourced from Zenodo were .TIF files. The images from these three sets were manually divided into the training and test sets. All images were re-scaled after being imported to R and transformations were randomly applied. The training data set was shuffled, but the test data set was not.  
+
+## 3. Code Section 1 – Data Acquisition, Exploration, Filtering, and Quality Control
+
+```{r Load Packages, message=FALSE, warning=FALSE,results='hide'}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60), tidy=TRUE)
+
+#422 sickle cell images and 147 control images
+#https://www.kaggle.com/datasets/florencetushabe/sickle-cell-disease-dataset?resource=download
+#24 scd images and 37 control images
+#https://zenodo.org/records/7801430
+# 1012 images 94 val
+#https://universe.roboflow.com/new-workspace-vecry/sickle-cell-anemia-detection-v.5/dataset/6
+
+library(keras)
+library(magick)
+library(tensorflow)
+library(tidyr)
+library(ggplot2)
+```
+
+```{r Import data, message=FALSE, warning=FALSE,fig.align='center', fig.cap=" **Figure 1.** Two random blood cell images from the training dataset. They have been appropriately processed (ex. resized) to be used in the model."}
+
+train_dir <- ".../A5/rscript/data/training_set"
+val_dir <- ".../A5/rscript/data/validation_set"
+
+# Load the images and split them into batches for training and validation using the flow_images_from_directory() function.
+# 1544 images in training set, 174 images in validation set
+# This part inspired by: https://www.geeksforgeeks.org/basic-image-classification-with-keras-in-r/
+# All of the images need to be processed before they're fed into the model. The image_data_generator() function applies transformations to the images. Re-scale normalizes pixel values to [0,1]. The other transformations were chosen based on what I thought were realistic for the data set (ex. different microscopes might have different brightness settings). class_mode is binary because we only have two classes for this data. Note that the training set is shuffled, so results will be slightly different everytime.
+
+train_datagen <- image_data_generator(
+  rescale = 1/255,                
+  shear_range = 0.1,              
+  zoom_range = 0.2,               
+  brightness_range = c(0.5,1.5)
+)
+
+train_generator <- flow_images_from_directory(
+  train_dir,
+  generator = train_datagen,
+  target_size = c(256, 256),
+  batch_size = 32,
+  class_mode = 'binary'
+)
+
+# We apply the same transformations to the test set for consistency
+test_datagen <- image_data_generator(
+  rescale = 1/255,                
+  shear_range = 0.1,              
+  zoom_range = 0.2,               
+  brightness_range = c(0.5,1.5)
+)
+
+test_generator <- flow_images_from_directory(
+  val_dir,
+  generator = test_datagen,
+  target_size =  c(256, 256),
+  batch_size = 32,
+  class_mode = 'binary', 
+  shuffle = FALSE
+)
+
+# Let's verify that we have the correct number of classes and correct batch size.
+class_num <- length(train_generator$class_indices)
+batch_size <- train_generator$batch_size
+
+# I can also make a dataframe with the class of each image based on the filename attribute for DirectoryIterator objects. This makes it easier for me to make a confusion matrix later since we can compare the model's predictions to the actual class of each test image.
+
+df_classes <- data.frame(class = character())
+
+for (i in 1:length(test_generator$filenames)) {
+  if (grepl("scd", test_generator$filenames[i])) {
+    df_classes <- rbind(df_classes, data.frame(class = 1, stringsAsFactors = FALSE))
+  } 
+  else if (grepl("control", test_generator$filenames[i])){
+    df_classes <- rbind(df_classes, data.frame(class = 0, stringsAsFactors = FALSE))
+  }
+}
+
+#Let's see what images we're working with. Since keras already changed this dataset into a DirectoryIterator object, we can access each one directly and use the magick library to display them. Note that the two images pulled will be random everytime due to them being shuffled.
+
+batch <- train_generator[[1]]
+batch2 <- train_generator[[2]]
+
+image_array <- image_read(as.raster(batch[[1]][1,,,]))
+image_array2 <- image_read(as.raster(batch2[[1]][1,,,]))
+
+image <- image_append(c(image_array, image_array2), stack = FALSE) 
+print(image)
+```
+
+## 4. Main Software Tools Description
+
+In addition to R, Python was used for this analysis. Python is a high-level programming language used for a wide range of applications, including machine learning. Python was utilized because it and R share similar packages for machine learning, so they were naturally quite compatible with one another. Finally, it is also relatively easy to use compared to some other programming languages. 
+
+## 5. Code Section 2 – Main Analysis
+
+```{r Building The Model}
+# Here we build the model. I used the same model as in https://www.geeksforgeeks.org/basic-image-classification-with-keras-in-r/ while changing the input shape parameter to match the images in my dataset. It is very common for data scientists to use premade cnns, such as ResNet-50, AlexNet, or VGG16, so I also decided to use a preexisting model. Each layer in the cnn has a purpose. Convolution layers (layer_conv_2d) detect texture or edges and dense layers are fully connected and perform the final classifications (units=1 because there are only two classes to choose from, and activation= "sigmoid" since this is a binary classification). Pooling layers increase computational efficiency. A dropout layer was added to decrease over-fitting. Note that all the layers need to be flattened into 1D vectors in order for the dense layers to do their job.
+
+model <- keras_model_sequential() %>%
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = 'relu', input_shape = c(256, 256, 3)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = 'relu') %>%
+  layer_dense(units = 1, activation = 'sigmoid')
+   
+
+# Optimizer: Determines how the model weights are updated during training.
+# Loss Function: Defines how the error is calculated. Since there are only two choices (2) 'binary_crossentropy' is used. I only want to know accuracy for this particular model. 
+
+model %>% compile(
+  optimizer = "adam",
+  loss = 'binary_crossentropy',  
+  metrics = c("accuracy")
+)
+
+```
+
+```{r Running The Model, message=FALSE, warning=FALSE, results='hide', fig.align='center', fig.cap='**Figure 2.** Accuracy and loss curves for the model after 5 epochs.'}
+# My data set is modestly sized, so a batch size of 32 is a good choice when balancing speed and accuracy. It is important to choose a good amount of epochs to prevent over-fitting. I settled with 5 epochs in the interest of time.
+# 1544 images, 32 batch size
+# 172 images, 32 batch size
+history <- model %>% fit(
+  train_generator,
+  steps_per_epoch = ceiling(1544 / 32),
+  validation_data = test_generator,
+  validation_steps = ceiling(172 / 32),
+  epochs = 5,          
+  verbose = 1
+)
+
+plot(history)
+
+# Lets see how good our model is!
+score <- model %>% evaluate(test_generator, verbose = 0)
+
+# About a 70% accuracy rate on the validation set. Not bad.
+cat('Test loss:', score["loss"], "\n")
+cat('Test accuracy:', score["accuracy"], "\n")
+
+# Since I'm using a binary classifier, each test image results in a single prediction score. score < 0.5 means the model thinks the image is a normal blood cells (class 0), score > 0.5 means the models thinks the image is from a sickle cell disease patient (class 1). I converted the regular predictions to binary predictions for ease of viewing and visualization in Python.
+
+model$trainable <- FALSE
+predictions <- model %>% predict(test_generator, df_classes$class, training = FALSE)
+bin_predictions <- ifelse(predictions >= 0.5, 1, 0)
+df_classes$predictions <- predictions
+df_classes$bin_predictions <- bin_predictions
+
+# If we compare the accuracy from the evaluate() and predict() functions, they are quite similar. The difference in percentages could be because of rounding errors, causing some predictions to fall into one class over another (ex. a score of 0.505 or 0.495).
+accuracy <- mean(df_classes$bin_predictions == df_classes$class)
+cat('Test accuracy with evaluate() vs predict():', score["accuracy"], accuracy, "\n")  
+  
+# Python can't read these arrays as they are, but it can read a .csv file.
+write.csv(df_classes, "predictions.csv")
+
+
+```
+
+
+
+```{python Python visuals part 1, message=FALSE, fig.align='center', fig.cap='**Figure 3.** Histogram of class 0 (normal) and class 1 (Sickle Cell Disease) predictions from the model.'}
+import pandas
+import numpy as np
+import matplotlib.pyplot as pyp
+import seaborn as sb
+from sklearn.metrics import confusion_matrix
+
+prediction_df = pandas.read_csv("predictions.csv")
+counts = prediction_df["bin_predictions"].value_counts()
+
+# A count plot is similar to a histogram.
+pyp.figure(figsize=(6, 4))
+sb.countplot(x='bin_predictions', data=prediction_df, palette='Blues')
+pyp.title('Frequency of Normal and SCD RBC Predictions')
+pyp.xlabel('Class Predicted')
+pyp.ylabel('Frequency')
+
+pyp.show()
+            
+```
+
+```{python Python visuals part 2, fig.align='center', fig.cap='**Figure 4.** Confusion matrix showing proportions of true positives, false positives, false negatives and true negatives. Recall that class 0= control and class 1=Sickle Cell Disease. Model displays an ~88% accuracy at classifying contol and ~48% accuracy at classifying SCD.'}
+# Create a confusion matrix which is a list of two lists (matrix). This can be plotted as a heatmap with Seaborn.
+confusion = confusion_matrix(prediction_df["class"], prediction_df["bin_predictions"])
+
+pyp.figure(figsize=(8, 6))
+sb.heatmap(confusion, annot= True, fmt='d', cmap='Blues', xticklabels=(0,1), yticklabels=prediction_df['class'].unique())
+pyp.xlabel('Predicted Class')
+pyp.ylabel('Actual Class')
+pyp.title('Confusion Matrix')
+pyp.show()
+# So the model is REALLY good at classifying normal blood cells (103/116 = 0.888 or 88% accuracy), but only so-so at classifying SCD blood cells correctly (28/58= 0.483 or 48% accuracy)
+
+```
+
+
+## 4.Results and Discussion
+
+The results show that the model used has mixed potential for diagnostics. While the model had an overall accuracy of around ~70% based on the evaluate() and predict() functions, the test loss started to oscillate for some epochs, indicating over-fitting. Over-fitting is when a model matches the training set, but performs poorly on a test set. This could be remedied by adding dropout layers in future models (Hinton et al., 2012). Also, the confusion matrix shows that while the model is very good at correctly classifying normal blood cells (~88% accuracy), it struggles with classifying SCD cells (~48% accuracy). These results were somewhat expected considering the small sample size, especially for the SCD images.   
+
+There are a few limitations to this project. The biggest one is a lack of computational power. This limited the amount of epochs that could be done as well as the amount of data that could be processed. CNNs typically benefit from much larger data sets than what was used. Also, there was a lack of open-source SCD images and a surplus of normal red blood cell images online. This made it much harder to create a training set that represented each class equally. The only options were to have unbalanced training and test sets, or use a much smaller sample size, both of which are unfavourable. The erythrocytesIDB dataset was considered, since it was also used by Jennifer et al. (2023), but, once again, there was a lack of computational power and time. Finally, it is important to note that since the training set is shuffled, the results may be slightly different every time R is reset.
+
+Therefore, in the future, a larger, better-designed data set would have to be used. There were a few larger data sets that were considered, but a lack of computational power became another issue. Due to time constraints, the model was only tested for 5 epochs, so the use of more could be beneficial in the future. Also, it could be interesting to investigate why the model was so good at classifying normal cells over SCD cells. Finally, the use of a more complex model should be considered in the future, especially if CNNs could see use in clinical settings.   
+
+## 5.Reflection
+
+Overall, I feel like this course made me comfortable with tackling a computational application not taught in this course. I learned a lot about how I can use R for bioinformatics which is a great compliment to my Python skills. I learned that I definitely need to manage my time a bit more, especially when I try out something a bit more complicated. In the future, I could benefit from starting earlier and making a deliberate effort to complete components on a regular basis. In the future, I also want to explore even more machine learning concepts as well as their applications. To sum up, this project taught me a lot and gave me direction for future endeavors. 
+
+## Acknowledgements
+None to list besides miscellaneous resources used for this project:
+
+1. https://stackoverflow.com/questions/73228158/why-is-accuracy-so-different-when-i-use-evaluate-and-predict
+2. https://medium.com/@dtuk81/confusion-matrix-visualization-fc31e3f30fea
+3. https://www.geeksforgeeks.org/basic-image-classification-with-keras-in-r/
+4. https://tensorflow.rstudio.com/tutorials/keras/classification
+5. https://www.youtube.com/watch?v=i8NETqtGHms
+
+## References
+
+1.  Kato, G., Piel, F., Reid, C. et al (2018). Sickle cell disease. Nat Rev Dis Primers 4, 18010. <https://doi.org/10.1038/nrdp.2018.10>
+2.  Kavanagh P.L., Fasipe T.A., Wun T. (2022). Sickle Cell Disease: A Review. JAMA. ;328(1):57–68. <doi:10.1001/jama.2022.10233>
+3.  Jennifer, S. S., Shamim, M. H., Reza, A. W., & Siddique, N. (2023). Sickle cell disease classification using deep learning. Heliyon, 9(11).
+4. Asya Makhro, Inga Hegemann, Jeroen S. Goede, Richard van Wijk, Maria Mañú-Pereira, Ario Sadafi, Carsten Marr, Lars Kaestner, & Anna Bogdanova. (2023). Red Blood Cell RedTell Dataset [Data set]. Zenodo. https://doi.org/10.5281/zenodo.7801430
+5. Florence Tushabe, Kasule Vicent (2022). Sickle Cell Disease Dataset [Data set]. Kaggle. https://www.kaggle.com/datasets/florencetushabe/sickle-cell-disease-dataset/code
+6. Unknown author (2021). sickle cell anemia detection v.5 Computer Vision Project [Data set]. Roboflow. https://universe.roboflow.com/new-workspace-vecry/sickle-cell-anemia-detection-v.5
+7. Hinton, G. E. (2012). Improving neural networks by preventing co-adaptation of feature detectors. arXiv preprint arXiv:1207.0580.
